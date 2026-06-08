@@ -1,6 +1,12 @@
+// Collapse accidental duplicate slashes in the path (e.g. "...netlify.app//.netlify/functions/...")
+// while preserving the "https://" scheme separator, so redirect_uri is always cleanly formatted.
+const normalizeRedirectUri = (raw) => raw.replace(/([^:]\/)\/+/g, '$1');
+
 exports.handler = async (event) => {
   const clientId = process.env.GOOGLE_CLIENT_ID;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI
+    ? normalizeRedirectUri(process.env.GOOGLE_REDIRECT_URI)
+    : undefined;
   const state = event.queryStringParameters?.state || '';
 
   if (!clientId || !redirectUri) {
@@ -26,8 +32,14 @@ exports.handler = async (event) => {
   authUrl.searchParams.set('prompt', 'consent');
   authUrl.searchParams.set('state', state);
 
+  // Send a real HTTP 302 so the browser navigates straight to Google's
+  // consent screen instead of receiving a JSON payload it has to handle itself.
   return {
-    statusCode: 200,
-    body: JSON.stringify({ url: authUrl.toString() }),
+    statusCode: 302,
+    headers: {
+      Location: authUrl.toString(),
+      'Cache-Control': 'no-store',
+    },
+    body: '',
   };
 };
