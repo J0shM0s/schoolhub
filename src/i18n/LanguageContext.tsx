@@ -14,14 +14,10 @@ interface LanguageProviderProps {
 }
 
 export function LanguageProvider({ children }: LanguageProviderProps) {
-  const [language, setLanguageState] = useState<Language>(() => {
-    const saved = localStorage.getItem('schoolhub_language');
-    return (saved as Language) || 'de';
-  });
+  const [language, setLanguageState] = useState<Language>('de');
 
   const setLanguage = (lang: Language) => {
     setLanguageState(lang);
-    localStorage.setItem('schoolhub_language', lang);
   };
 
   const t = (key: TranslationKey, params?: Record<string, string | number>): string => {

@@ -1,10 +1,10 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Home, Calendar, BookOpen, GraduationCap, Plus, Settings } from 'lucide-react';
 import { useData } from './hooks/useData';
 import { AuthProvider, useAuthContext } from './hooks/useAuthContext';
 import { supabase } from './lib/supabase';
 import { LanguageProvider, useLanguage } from './i18n/LanguageContext';
-import { TabType, FormData } from './types';
+import { TabType, FormData, GoogleImportItem, GoogleSource } from './types';
 import { Dashboard } from './components/Dashboard';
 import { Calendar as CalendarView } from './components/Calendar';
 import { Homework } from './components/Homework';
@@ -13,8 +13,24 @@ import { AddModal } from './components/AddModal';
 import { AuthPage } from './components/AuthPage';
 import { SettingsPanel } from './components/SettingsPanel';
 
+const itemSourceKey = (type: 'task' | 'exam', title: string, date: string, subject: string) =>
+  `${type}|${title.trim().toLowerCase()}|${date}|${subject.trim().toLowerCase()}`;
+
+type GoogleImportedSourceMap = Record<string, { sourceId: string; kind: 'calendar' | 'taskList' }>;
+
+interface GoogleSettings {
+  google_access_token: string | null;
+  google_refresh_token: string | null;
+  google_token_expiry: number | null;
+  google_calendar_sync: boolean;
+  google_tasks_sync: boolean;
+  google_selected_calendar_ids: string[] | null;
+  google_selected_tasklist_ids: string[] | null;
+  google_imported_source_map: GoogleImportedSourceMap | null;
+}
+
 function AppContent() {
-  const { t, language } = useLanguage();
+  const { t, language, setLanguage } = useLanguage();
   const { session, loading: authLoading, signUp, signIn, signOut } = useAuthContext();
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -22,6 +38,10 @@ function AppContent() {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [googleCalendars, setGoogleCalendars] = useState<GoogleSource[]>([]);
+  const [googleTaskLists, setGoogleTaskLists] = useState<GoogleSource[]>([]);
+  const [googleImportedSourceMap, setGoogleImportedSourceMap] = useState<GoogleImportedSourceMap>({});
+  const autoImportKeyRef = useRef<string | null>(null);
 
   const {
     tasks,
@@ -33,9 +53,20 @@ function AppContent() {
     addExam,
     updateExam,
     deleteExam,
+    refresh,
   } = useData();
 
   const isLoading = authLoading || dataLoading;
+  const selectedGoogleCalendarIds = new Set(googleCalendars.filter((source) => source.selected).map((source) => source.id));
+  const selectedGoogleTaskListIds = new Set(googleTaskLists.filter((source) => source.selected).map((source) => source.id));
+  const shouldShowGoogleItem = (type: 'task' | 'exam', title: string, date: string, subject: string) => {
+    const source = googleImportedSourceMap[itemSourceKey(type, title, date, subject)];
+    if (!source) return true;
+    if (source.kind === 'calendar') return googleCalendars.length === 0 || selectedGoogleCalendarIds.has(source.sourceId);
+    return googleTaskLists.length === 0 || selectedGoogleTaskListIds.has(source.sourceId);
+  };
+  const visibleTasks = tasks.filter((task) => shouldShowGoogleItem('task', task.title, task.due_date, task.subject));
+  const visibleExams = exams.filter((exam) => shouldShowGoogleItem('exam', exam.title, exam.exam_date, exam.subject));
 
   const handleAuth = async (email: string, password: string, isSignUp: boolean) => {
     if (isSignUp) {
@@ -134,6 +165,8 @@ function AppContent() {
             google_access_token: accessToken,
             google_refresh_token: refreshToken ?? null,
             google_token_expiry: expiresAt,
+            google_calendar_sync: true,
+            google_tasks_sync: true,
           })
           .eq('user_id', session.user.id);
         setRefreshKey((k) => k + 1);
@@ -144,6 +177,189 @@ function AppContent() {
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, [session?.user?.id]);
+
+  const loadGoogleSettings = useCallback(async () => {
+    if (!session?.user?.id) {
+      setGoogleImportedSourceMap({});
+      return null;
+    }
+
+    const { data, error } = await supabase
+      .from('user_settings')
+      .select('google_access_token, google_refresh_token, google_token_expiry, google_calendar_sync, google_tasks_sync, google_selected_calendar_ids, google_selected_tasklist_ids, google_imported_source_map')
+      .eq('user_id', session.user.id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Failed to load Google settings:', error);
+      return null;
+    }
+
+    const settings = data as GoogleSettings | null;
+    setGoogleImportedSourceMap(settings?.google_imported_source_map ?? {});
+    return settings;
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    loadGoogleSettings();
+  }, [loadGoogleSettings]);
+
+  const updateGoogleTokens = useCallback(async (
+    currentRefreshToken: string | null,
+    tokens?: { access_token: string; refresh_token?: string | null; expires_at: number | null }
+  ) => {
+    if (!session?.user?.id || !tokens) return;
+
+    await supabase
+      .from('user_settings')
+      .update({
+        google_access_token: tokens.access_token,
+        google_refresh_token: tokens.refresh_token ?? currentRefreshToken,
+        google_token_expiry: tokens.expires_at,
+      })
+      .eq('user_id', session.user.id);
+  }, [session?.user?.id]);
+
+  const importGoogleData = useCallback(async (showSaved = false) => {
+    if (!session?.user?.id) return;
+
+    const settings = await loadGoogleSettings();
+
+    if (!settings?.google_access_token && !settings?.google_refresh_token) return;
+    if (!settings.google_calendar_sync && !settings.google_tasks_sync) return;
+
+    const response = await fetch('/.netlify/functions/google-import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        access_token: settings.google_access_token,
+        refresh_token: settings.google_refresh_token,
+        expires_at: settings.google_token_expiry,
+        selected_calendar_ids: settings.google_calendar_sync ? settings.google_selected_calendar_ids : [],
+        selected_tasklist_ids: settings.google_tasks_sync ? settings.google_selected_tasklist_ids : [],
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      console.error('Failed to import Google data:', result);
+      return;
+    }
+
+    await updateGoogleTokens(settings.google_refresh_token, result.tokens);
+    setGoogleCalendars(result.calendars || []);
+    setGoogleTaskLists(result.taskLists || []);
+
+    const selectedCalendarIds = (result.calendars || [])
+      .filter((source: GoogleSource) => source.selected)
+      .map((source: GoogleSource) => source.id);
+    const selectedTaskListIds = (result.taskLists || [])
+      .filter((source: GoogleSource) => source.selected)
+      .map((source: GoogleSource) => source.id);
+    const calendarIdsToSave = settings.google_selected_calendar_ids ?? selectedCalendarIds;
+    const taskListIdsToSave = settings.google_selected_tasklist_ids ?? selectedTaskListIds;
+
+    const importedItems = (result.items || []) as GoogleImportItem[];
+    const normalize = (value: string | null | undefined) => (value || '').trim().toLowerCase();
+    const taskKeys = new Set(tasks.map((task) => `${normalize(task.title)}|${task.due_date}|${normalize(task.subject)}`));
+    const examKeys = new Set(exams.map((exam) => `${normalize(exam.title)}|${exam.exam_date}|${normalize(exam.subject)}`));
+
+    const tasksToInsert = importedItems
+      .filter((item) => item.type === 'task')
+      .filter((item) => {
+        const key = `${normalize(item.title)}|${item.date}|${normalize(item.subject)}`;
+        if (taskKeys.has(key)) return false;
+        taskKeys.add(key);
+        return true;
+      })
+      .map((item) => ({
+        user_id: session.user.id,
+        subject: item.subject,
+        title: item.title,
+        description: item.description,
+        due_date: item.date,
+        priority: 'medium',
+        completed: Boolean(item.completed),
+      }));
+
+    const examsToInsert = importedItems
+      .filter((item) => item.type === 'exam')
+      .filter((item) => {
+        const key = `${normalize(item.title)}|${item.date}|${normalize(item.subject)}`;
+        if (examKeys.has(key)) return false;
+        examKeys.add(key);
+        return true;
+      })
+      .map((item) => ({
+        user_id: session.user.id,
+        subject: item.subject,
+        title: item.title,
+        description: item.description,
+        exam_date: item.date,
+        study_progress: 0,
+      }));
+
+    const nextSourceMap = { ...(settings.google_imported_source_map ?? {}) };
+    const calendarIdsFromImport = new Set((result.calendars || []).map((source: GoogleSource) => source.id));
+    for (const item of importedItems) {
+      nextSourceMap[itemSourceKey(item.type, item.title, item.date, item.subject)] = {
+        sourceId: item.source_id,
+        kind: calendarIdsFromImport.has(item.source_id) ? 'calendar' : 'taskList',
+      };
+    }
+    await supabase
+      .from('user_settings')
+      .upsert({
+        user_id: session.user.id,
+        google_selected_calendar_ids: calendarIdsToSave,
+        google_selected_tasklist_ids: taskListIdsToSave,
+        google_imported_source_map: nextSourceMap,
+      })
+      .eq('user_id', session.user.id);
+    setGoogleImportedSourceMap(nextSourceMap);
+
+    if (tasksToInsert.length > 0) {
+      await supabase.from('tasks').insert(tasksToInsert);
+    }
+    if (examsToInsert.length > 0) {
+      await supabase.from('exams').insert(examsToInsert);
+    }
+    if (tasksToInsert.length > 0 || examsToInsert.length > 0) {
+      await refresh();
+    }
+    if (showSaved) setShowSuccess(true);
+  }, [exams, loadGoogleSettings, refresh, session?.user?.id, tasks, updateGoogleTokens]);
+
+  const handleRefreshGoogleSources = useCallback(async () => {
+    await importGoogleData(false);
+  }, [importGoogleData]);
+
+  const handleGoogleSourceToggle = useCallback(async (kind: 'calendar' | 'taskList', id: string, selected: boolean) => {
+    if (!session?.user?.id) return;
+
+    if (kind === 'calendar') {
+      const next = googleCalendars.map((source) => source.id === id ? { ...source, selected } : source);
+      setGoogleCalendars(next);
+      await supabase
+        .from('user_settings')
+        .upsert({
+          user_id: session.user.id,
+          google_selected_calendar_ids: next.filter((source) => source.selected).map((source) => source.id),
+        })
+        .eq('user_id', session.user.id);
+    } else {
+      const next = googleTaskLists.map((source) => source.id === id ? { ...source, selected } : source);
+      setGoogleTaskLists(next);
+      await supabase
+        .from('user_settings')
+        .upsert({
+          user_id: session.user.id,
+          google_selected_tasklist_ids: next.filter((source) => source.selected).map((source) => source.id),
+        })
+        .eq('user_id', session.user.id);
+    }
+    await importGoogleData(true);
+  }, [googleCalendars, googleTaskLists, importGoogleData, session?.user?.id]);
 
   const handleGoogleDisconnect = async () => {
     if (!session?.user?.id) return;
@@ -160,6 +376,30 @@ function AppContent() {
       .eq('user_id', session.user.id);
     setRefreshKey((k) => k + 1);
   };
+
+  useEffect(() => {
+    const loadLanguage = async () => {
+      if (!session?.user?.id) return;
+      const { data } = await supabase
+        .from('user_settings')
+        .select('language')
+        .eq('user_id', session.user.id)
+        .maybeSingle();
+      if (data?.language === 'de' || data?.language === 'en') {
+        setLanguage(data.language);
+      }
+    };
+
+    loadLanguage();
+  }, [session?.user?.id, setLanguage]);
+
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const key = `${session.user.id}-${refreshKey}`;
+    if (autoImportKeyRef.current === key) return;
+    autoImportKeyRef.current = key;
+    importGoogleData(false);
+  }, [importGoogleData, refreshKey, session?.user?.id]);
 
   const handleSyncCalendar = async () => {
     if (!session?.user?.id) return;
@@ -338,16 +578,16 @@ function AppContent() {
 
       <main className="max-w-5xl mx-auto px-4 py-6">
         {activeTab === 'dashboard' && (
-          <Dashboard tasks={tasks} exams={exams} onToggleTask={handleToggleTask} />
+          <Dashboard tasks={visibleTasks} exams={visibleExams} onToggleTask={handleToggleTask} />
         )}
         {activeTab === 'calendar' && (
-          <CalendarView tasks={tasks} exams={exams} onSelectDate={handleDateSelect} />
+          <CalendarView tasks={visibleTasks} exams={visibleExams} onSelectDate={handleDateSelect} />
         )}
         {activeTab === 'homework' && (
-          <Homework tasks={tasks} onToggleTask={handleToggleTask} onDeleteTask={deleteTask} />
+          <Homework tasks={visibleTasks} onToggleTask={handleToggleTask} onDeleteTask={deleteTask} />
         )}
         {activeTab === 'exams' && (
-          <Exams exams={exams} onUpdateProgress={handleUpdateExamProgress} onDeleteExam={deleteExam} />
+          <Exams exams={visibleExams} onUpdateProgress={handleUpdateExamProgress} onDeleteExam={deleteExam} />
         )}
       </main>
 
@@ -397,6 +637,11 @@ function AppContent() {
         onGoogleDisconnect={handleGoogleDisconnect}
         onSyncCalendar={handleSyncCalendar}
         onSyncTasks={handleSyncTasks}
+        onImportGoogleData={() => importGoogleData(true)}
+        onRefreshGoogleSources={handleRefreshGoogleSources}
+        onGoogleSourceToggle={handleGoogleSourceToggle}
+        googleCalendars={googleCalendars}
+        googleTaskLists={googleTaskLists}
         userEmail={session?.user?.email || ''}
         userId={session?.user?.id || ''}
       />

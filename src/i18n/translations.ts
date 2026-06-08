@@ -95,6 +95,9 @@ export const translations = {
     googleTasks: 'Google Tasks',
     googleConnected: 'Google verbunden',
     googleNotConnected: 'Nicht verbunden',
+    googleAutoSync: 'Automatischer Import ist aktiv.',
+    importGoogleNow: 'Jetzt von Google importieren',
+    loadGoogleSources: 'Kalender und Listen laden',
 
     // Settings
     language: 'Sprache',
@@ -206,6 +209,9 @@ export const translations = {
     googleTasks: 'Google Tasks',
     googleConnected: 'Google Connected',
     googleNotConnected: 'Not connected',
+    googleAutoSync: 'Automatic import is active.',
+    importGoogleNow: 'Import from Google now',
+    loadGoogleSources: 'Load calendars and lists',
 
     // Settings
     language: 'Language',

@@ -35,3 +35,22 @@ export interface FormData {
   date: string;
   priority: Priority;
 }
+
+export interface GoogleSource {
+  id: string;
+  title: string;
+  selected: boolean;
+  type: 'task' | 'exam';
+}
+
+export interface GoogleImportItem {
+  google_id: string;
+  title: string;
+  description: string | null;
+  date: string;
+  completed?: boolean;
+  subject: string;
+  type: 'task' | 'exam';
+  source_id: string;
+  source_title: string;
+}

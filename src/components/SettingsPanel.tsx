@@ -1,7 +1,17 @@
-import { useState, useEffect } from 'react';
-import { X, Globe, Link, Unlink, Calendar, CheckSquare, LogOut, User, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { X, Globe, Link, Unlink, Calendar, CheckSquare, LogOut, User, AlertCircle, RefreshCw } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
-import { getUserSettings, saveUserSettings, UserSettings } from '../lib/localStorage';
+import { supabase } from '../lib/supabase';
+import { GoogleSource } from '../types';
+
+interface UserSettings {
+  language: 'de' | 'en';
+  google_calendar_sync: boolean;
+  google_tasks_sync: boolean;
+  google_access_token: string | null;
+  google_refresh_token: string | null;
+  google_token_expiry: number | null;
+}
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -11,6 +21,11 @@ interface SettingsPanelProps {
   onGoogleDisconnect: () => void;
   onSyncCalendar: () => void;
   onSyncTasks: () => void;
+  onImportGoogleData: () => void;
+  onRefreshGoogleSources: () => void;
+  onGoogleSourceToggle: (kind: 'calendar' | 'taskList', id: string, selected: boolean) => void;
+  googleCalendars: GoogleSource[];
+  googleTaskLists: GoogleSource[];
   userEmail: string;
   userId: string;
 }
@@ -23,29 +38,48 @@ export function SettingsPanel({
   onGoogleDisconnect,
   onSyncCalendar,
   onSyncTasks,
+  onImportGoogleData,
+  onRefreshGoogleSources,
+  onGoogleSourceToggle,
+  googleCalendars,
+  googleTaskLists,
   userEmail,
   userId,
 }: SettingsPanelProps) {
   const { t, language, setLanguage } = useLanguage();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState<'calendar' | 'tasks' | null>(null);
+  const [syncing, setSyncing] = useState<'calendar' | 'tasks' | 'import' | 'sources' | null>(null);
+
+  const loadSettings = useCallback(async () => {
+    setLoading(true);
+    const { data: remoteSettings } = await supabase
+      .from('user_settings')
+      .select('language, google_calendar_sync, google_tasks_sync, google_access_token, google_refresh_token, google_token_expiry')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    const nextSettings: UserSettings = {
+      language: remoteSettings?.language ?? 'de',
+      google_calendar_sync: Boolean(remoteSettings?.google_calendar_sync),
+      google_tasks_sync: Boolean(remoteSettings?.google_tasks_sync),
+      google_access_token: remoteSettings?.google_access_token ?? null,
+      google_refresh_token: remoteSettings?.google_refresh_token ?? null,
+      google_token_expiry: remoteSettings?.google_token_expiry ?? null,
+    };
+
+    setSettings(nextSettings);
+    if (nextSettings.language && nextSettings.language !== language) {
+      setLanguage(nextSettings.language);
+    }
+    setLoading(false);
+  }, [language, setLanguage, userId]);
 
   useEffect(() => {
     if (isOpen && userId) {
       loadSettings();
     }
-  }, [isOpen, userId]);
-
-  const loadSettings = async () => {
-    setLoading(true);
-    const userSettings = getUserSettings(userId);
-    setSettings(userSettings);
-    if (userSettings.language && userSettings.language !== language) {
-      setLanguage(userSettings.language);
-    }
-    setLoading(false);
-  };
+  }, [isOpen, loadSettings, userId]);
 
   const handleLanguageChange = async (lang: 'de' | 'en') => {
     setLanguage(lang);
@@ -64,7 +98,13 @@ export function SettingsPanel({
     };
 
     setSettings(nextSettings);
-    saveUserSettings(userId, nextSettings);
+    await supabase
+      .from('user_settings')
+      .upsert({
+        user_id: userId,
+        language: lang,
+      })
+      .eq('user_id', userId);
   };
 
   const handleToggleSync = async (type: 'calendar' | 'tasks') => {
@@ -77,7 +117,14 @@ export function SettingsPanel({
     } as UserSettings;
 
     setSettings(nextSettings);
-    saveUserSettings(userId, nextSettings);
+    await supabase
+      .from('user_settings')
+      .upsert({
+        user_id: userId,
+        [field]: nextSettings[field],
+      })
+      .eq('user_id', userId);
+    await onRefreshGoogleSources();
   };
 
   const handleSyncCalendar = async () => {
@@ -91,6 +138,25 @@ export function SettingsPanel({
     await onSyncTasks();
     setSyncing(null);
   };
+
+  const handleImportGoogleData = async () => {
+    setSyncing('import');
+    await onImportGoogleData();
+    setSyncing(null);
+  };
+
+  const handleRefreshGoogleSources = async () => {
+    setSyncing('sources');
+    await onRefreshGoogleSources();
+    setSyncing(null);
+  };
+
+  const sourceLabel = (source: GoogleSource) => (
+    <span className="min-w-0">
+      <span className="block text-sm font-medium text-gray-900 truncate">{source.title}</span>
+      <span className="block text-xs text-gray-500">{source.type === 'exam' ? t('exam') : t('task')}</span>
+    </span>
+  );
 
   if (!isOpen) return null;
 
@@ -172,7 +238,7 @@ export function SettingsPanel({
                 {t('syncSettings')}
               </h3>
 
-              {!settings?.google_access_token ? (
+              {!settings?.google_access_token && !settings?.google_refresh_token ? (
                 <div className="bg-gray-50 rounded-xl p-5 border border-gray-200">
                   <div className="flex items-start gap-3 mb-4">
                     <AlertCircle className="w-5 h-5 text-gray-400 mt-0.5" />
@@ -182,7 +248,10 @@ export function SettingsPanel({
                     </div>
                   </div>
                   <button
-                    onClick={onGoogleConnect}
+                    onClick={async () => {
+                      await onGoogleConnect();
+                      setTimeout(loadSettings, 1000);
+                    }}
                     className="w-full py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl flex items-center justify-center gap-2 transition-colors"
                   >
                     {t('connectGoogle')}
@@ -196,8 +265,20 @@ export function SettingsPanel({
                         <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
                       </svg>
                     </div>
-                    <p className="font-medium text-green-700">{t('googleConnected')}</p>
+                    <div>
+                      <p className="font-medium text-green-700">{t('googleConnected')}</p>
+                      <p className="text-sm text-green-700/80">{t('googleAutoSync')}</p>
+                    </div>
                   </div>
+
+                  <button
+                    onClick={handleImportGoogleData}
+                    disabled={syncing === 'import'}
+                    className="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${syncing === 'import' ? 'animate-spin' : ''}`} />
+                    {syncing === 'import' ? t('loading') : t('importGoogleNow')}
+                  </button>
 
                   <div className="bg-white border border-gray-200 rounded-xl p-4">
                     <div className="flex items-center justify-between mb-3">
@@ -217,13 +298,36 @@ export function SettingsPanel({
                       </button>
                     </div>
                     {settings.google_calendar_sync && (
-                      <button
-                        onClick={handleSyncCalendar}
-                        disabled={syncing === 'calendar'}
-                        className="w-full py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                      >
-                        {syncing === 'calendar' ? t('loading') : t('syncCalendar')}
-                      </button>
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          {googleCalendars.length === 0 ? (
+                            <button
+                              onClick={handleRefreshGoogleSources}
+                              disabled={syncing === 'sources'}
+                              className="w-full py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                            >
+                              {syncing === 'sources' ? t('loading') : t('loadGoogleSources')}
+                            </button>
+                          ) : googleCalendars.map((source) => (
+                            <label key={source.id} className="flex items-center gap-3 rounded-lg bg-gray-50 px-3 py-2">
+                              <input
+                                type="checkbox"
+                                checked={source.selected}
+                                onChange={(event) => onGoogleSourceToggle('calendar', source.id, event.target.checked)}
+                                className="h-4 w-4 rounded border-gray-300 text-blue-600"
+                              />
+                              {sourceLabel(source)}
+                            </label>
+                          ))}
+                        </div>
+                        <button
+                          onClick={handleSyncCalendar}
+                          disabled={syncing === 'calendar'}
+                          className="w-full py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {syncing === 'calendar' ? t('loading') : t('syncCalendar')}
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -245,13 +349,36 @@ export function SettingsPanel({
                       </button>
                     </div>
                     {settings.google_tasks_sync && (
-                      <button
-                        onClick={handleSyncTasks}
-                        disabled={syncing === 'tasks'}
-                        className="w-full py-2 bg-green-50 hover:bg-green-100 text-green-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                      >
-                        {syncing === 'tasks' ? t('loading') : t('syncTasks')}
-                      </button>
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          {googleTaskLists.length === 0 ? (
+                            <button
+                              onClick={handleRefreshGoogleSources}
+                              disabled={syncing === 'sources'}
+                              className="w-full py-2 bg-green-50 hover:bg-green-100 text-green-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                            >
+                              {syncing === 'sources' ? t('loading') : t('loadGoogleSources')}
+                            </button>
+                          ) : googleTaskLists.map((source) => (
+                            <label key={source.id} className="flex items-center gap-3 rounded-lg bg-gray-50 px-3 py-2">
+                              <input
+                                type="checkbox"
+                                checked={source.selected}
+                                onChange={(event) => onGoogleSourceToggle('taskList', source.id, event.target.checked)}
+                                className="h-4 w-4 rounded border-gray-300 text-green-600"
+                              />
+                              {sourceLabel(source)}
+                            </label>
+                          ))}
+                        </div>
+                        <button
+                          onClick={handleSyncTasks}
+                          disabled={syncing === 'tasks'}
+                          className="w-full py-2 bg-green-50 hover:bg-green-100 text-green-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {syncing === 'tasks' ? t('loading') : t('syncTasks')}
+                        </button>
+                      </div>
                     )}
                   </div>
 
