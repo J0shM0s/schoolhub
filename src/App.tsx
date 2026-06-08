@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { Home, Calendar, BookOpen, GraduationCap, Plus, Settings } from 'lucide-react';
 import { useData } from './hooks/useData';
 import { AuthProvider, useAuthContext } from './hooks/useAuthContext';
-import { getUserSettings, updateUserSettings } from './lib/localStorage';
+import { supabase } from './lib/supabase';
 import { LanguageProvider, useLanguage } from './i18n/LanguageContext';
 import { TabType, FormData } from './types';
 import { Dashboard } from './components/Dashboard';
@@ -116,7 +116,7 @@ function AppContent() {
   }, [session?.user?.id]);
 
   useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
+    const handleMessage = async (event: MessageEvent) => {
       if (!session?.user?.id) return;
       if (event.origin !== window.location.origin) return;
       const data = event.data as Record<string, unknown>;
@@ -127,11 +127,15 @@ function AppContent() {
       const expiresAt = typeof data.expires_at === 'number' ? data.expires_at : null;
 
       if (accessToken) {
-        updateUserSettings(session.user.id, {
-          google_access_token: accessToken,
-          google_refresh_token: refreshToken ?? null,
-          google_token_expiry: expiresAt,
-        });
+        await supabase
+          .from('user_settings')
+          .upsert({
+            user_id: session.user.id,
+            google_access_token: accessToken,
+            google_refresh_token: refreshToken ?? null,
+            google_token_expiry: expiresAt,
+          })
+          .eq('user_id', session.user.id);
         setRefreshKey((k) => k + 1);
         setShowSuccess(true);
       }
@@ -144,20 +148,29 @@ function AppContent() {
   const handleGoogleDisconnect = async () => {
     if (!session?.user?.id) return;
 
-    updateUserSettings(session.user.id, {
-      google_access_token: null,
-      google_refresh_token: null,
-      google_token_expiry: null,
-      google_calendar_sync: false,
-      google_tasks_sync: false,
-    });
+    await supabase
+      .from('user_settings')
+      .update({
+        google_access_token: null,
+        google_refresh_token: null,
+        google_token_expiry: null,
+        google_calendar_sync: false,
+        google_tasks_sync: false,
+      })
+      .eq('user_id', session.user.id);
     setRefreshKey((k) => k + 1);
   };
 
   const handleSyncCalendar = async () => {
     if (!session?.user?.id) return;
-    const settings = getUserSettings(session.user.id);
-    if (!settings.google_access_token && !settings.google_refresh_token) return;
+    
+    const { data: settings } = await supabase
+      .from('user_settings')
+      .select('google_access_token, google_refresh_token, google_token_expiry')
+      .eq('user_id', session.user.id)
+      .single();
+
+    if (!settings?.google_access_token && !settings?.google_refresh_token) return;
 
     const eventsToSync = tasks
       .filter((t) => !t.completed)
@@ -182,11 +195,14 @@ function AppContent() {
 
     const result = await response.json();
     if (result.tokens) {
-      updateUserSettings(session.user.id, {
-        google_access_token: result.tokens.access_token,
-        google_refresh_token: result.tokens.refresh_token ?? settings.google_refresh_token,
-        google_token_expiry: result.tokens.expires_at,
-      });
+      await supabase
+        .from('user_settings')
+        .update({
+          google_access_token: result.tokens.access_token,
+          google_refresh_token: result.tokens.refresh_token ?? settings.google_refresh_token,
+          google_token_expiry: result.tokens.expires_at,
+        })
+        .eq('user_id', session.user.id);
       setRefreshKey((k) => k + 1);
     }
     setShowSuccess(true);
@@ -194,8 +210,14 @@ function AppContent() {
 
   const handleSyncTasks = async () => {
     if (!session?.user?.id) return;
-    const settings = getUserSettings(session.user.id);
-    if (!settings.google_access_token && !settings.google_refresh_token) return;
+    
+    const { data: settings } = await supabase
+      .from('user_settings')
+      .select('google_access_token, google_refresh_token, google_token_expiry')
+      .eq('user_id', session.user.id)
+      .single();
+
+    if (!settings?.google_access_token && !settings?.google_refresh_token) return;
 
     const tasksToSync = tasks.map((t) => ({
       id: t.id,
@@ -219,11 +241,14 @@ function AppContent() {
 
     const result = await response.json();
     if (result.tokens) {
-      updateUserSettings(session.user.id, {
-        google_access_token: result.tokens.access_token,
-        google_refresh_token: result.tokens.refresh_token ?? settings.google_refresh_token,
-        google_token_expiry: result.tokens.expires_at,
-      });
+      await supabase
+        .from('user_settings')
+        .update({
+          google_access_token: result.tokens.access_token,
+          google_refresh_token: result.tokens.refresh_token ?? settings.google_refresh_token,
+          google_token_expiry: result.tokens.expires_at,
+        })
+        .eq('user_id', session.user.id);
       setRefreshKey((k) => k + 1);
     }
     setShowSuccess(true);

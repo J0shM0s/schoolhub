@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Task, Exam } from '../types';
 import { useAuthContext } from './useAuthContext';
-import { getUserData, saveUserData, generateId, nowISO } from '../lib/localStorage';
+import { supabase } from '../lib/supabase';
 
 export function useData() {
   const { user } = useAuthContext();
@@ -9,7 +9,7 @@ export function useData() {
   const [exams, setExams] = useState<Exam[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = useCallback(() => {
+  const fetchData = useCallback(async () => {
     if (!user) {
       setTasks([]);
       setExams([]);
@@ -17,9 +17,27 @@ export function useData() {
       return;
     }
 
-    const { tasks: storedTasks, exams: storedExams } = getUserData(user.id);
-    setTasks(storedTasks);
-    setExams(storedExams);
+    try {
+      const [{ data: tasksData }, { data: examsData }] = await Promise.all([
+        supabase
+          .from('tasks')
+          .select('*')
+          .eq('user_id', user.id),
+        supabase
+          .from('exams')
+          .select('*')
+          .eq('user_id', user.id),
+      ]);
+
+      setTasks((tasksData || []).sort((a, b) =>
+        new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
+      ));
+      setExams((examsData || []).sort((a, b) =>
+        new Date(a.exam_date).getTime() - new Date(b.exam_date).getTime()
+      ));
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    }
     setLoading(false);
   }, [user]);
 
@@ -28,31 +46,27 @@ export function useData() {
     fetchData();
   }, [fetchData]);
 
-  const persist = (nextTasks: Task[], nextExams: Exam[]) => {
-    if (!user) return;
-    saveUserData(user.id, { tasks: nextTasks, exams: nextExams });
-  };
-
   const addTask = async (task: Omit<Task, 'id' | 'user_id' | 'created_at' | 'updated_at'>) => {
     if (!user) {
       return { data: null, error: new Error('No authenticated user') };
     }
 
-    const newTask: Task = {
-      ...task,
-      id: generateId(),
-      user_id: user.id,
-      created_at: nowISO(),
-      updated_at: nowISO(),
-    };
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert({
+        ...task,
+        user_id: user.id,
+      })
+      .select()
+      .single();
 
-    const nextTasks = [...tasks, newTask].sort((a, b) =>
-      new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
-    );
-    setTasks(nextTasks);
-    persist(nextTasks, exams);
+    if (data) {
+      setTasks([...tasks, data].sort((a, b) =>
+        new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
+      ));
+    }
 
-    return { data: newTask, error: null };
+    return { data, error };
   };
 
   const updateTask = async (id: string, updates: Partial<Task>) => {
@@ -60,14 +74,19 @@ export function useData() {
       return { data: null, error: new Error('No authenticated user') };
     }
 
-    const nextTasks = tasks.map((task) =>
-      task.id === id ? { ...task, ...updates, updated_at: nowISO() } : task
-    );
-    setTasks(nextTasks);
-    persist(nextTasks, exams);
+    const { data, error } = await supabase
+      .from('tasks')
+      .update(updates)
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .select()
+      .single();
 
-    const updatedTask = nextTasks.find((task) => task.id === id) ?? null;
-    return { data: updatedTask, error: null };
+    if (data) {
+      setTasks(tasks.map((task) => (task.id === id ? data : task)));
+    }
+
+    return { data, error };
   };
 
   const deleteTask = async (id: string) => {
@@ -75,10 +94,17 @@ export function useData() {
       return { error: new Error('No authenticated user') };
     }
 
-    const nextTasks = tasks.filter((task) => task.id !== id);
-    setTasks(nextTasks);
-    persist(nextTasks, exams);
-    return { error: null };
+    const { error } = await supabase
+      .from('tasks')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', user.id);
+
+    if (!error) {
+      setTasks(tasks.filter((task) => task.id !== id));
+    }
+
+    return { error };
   };
 
   const addExam = async (exam: Omit<Exam, 'id' | 'user_id' | 'created_at' | 'updated_at'>) => {
@@ -86,21 +112,22 @@ export function useData() {
       return { data: null, error: new Error('No authenticated user') };
     }
 
-    const newExam: Exam = {
-      ...exam,
-      id: generateId(),
-      user_id: user.id,
-      created_at: nowISO(),
-      updated_at: nowISO(),
-    };
+    const { data, error } = await supabase
+      .from('exams')
+      .insert({
+        ...exam,
+        user_id: user.id,
+      })
+      .select()
+      .single();
 
-    const nextExams = [...exams, newExam].sort((a, b) =>
-      new Date(a.exam_date).getTime() - new Date(b.exam_date).getTime()
-    );
-    setExams(nextExams);
-    persist(tasks, nextExams);
+    if (data) {
+      setExams([...exams, data].sort((a, b) =>
+        new Date(a.exam_date).getTime() - new Date(b.exam_date).getTime()
+      ));
+    }
 
-    return { data: newExam, error: null };
+    return { data, error };
   };
 
   const updateExam = async (id: string, updates: Partial<Exam>) => {
@@ -108,14 +135,19 @@ export function useData() {
       return { data: null, error: new Error('No authenticated user') };
     }
 
-    const nextExams = exams.map((exam) =>
-      exam.id === id ? { ...exam, ...updates, updated_at: nowISO() } : exam
-    );
-    setExams(nextExams);
-    persist(tasks, nextExams);
+    const { data, error } = await supabase
+      .from('exams')
+      .update(updates)
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .select()
+      .single();
 
-    const updatedExam = nextExams.find((exam) => exam.id === id) ?? null;
-    return { data: updatedExam, error: null };
+    if (data) {
+      setExams(exams.map((exam) => (exam.id === id ? data : exam)));
+    }
+
+    return { data, error };
   };
 
   const deleteExam = async (id: string) => {
@@ -123,10 +155,17 @@ export function useData() {
       return { error: new Error('No authenticated user') };
     }
 
-    const nextExams = exams.filter((exam) => exam.id !== id);
-    setExams(nextExams);
-    persist(tasks, nextExams);
-    return { error: null };
+    const { error } = await supabase
+      .from('exams')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', user.id);
+
+    if (!error) {
+      setExams(exams.filter((exam) => exam.id !== id));
+    }
+
+    return { error };
   };
 
   return {
