@@ -184,11 +184,22 @@ function AppContent() {
       return null;
     }
 
-    const { data, error } = await supabase
+    const selectGoogleSettings = async (includePersistedSources: boolean) => supabase
       .from('user_settings')
-      .select('google_access_token, google_refresh_token, google_token_expiry, google_calendar_sync, google_tasks_sync, google_selected_calendar_ids, google_selected_tasklist_ids, google_imported_source_map')
+      .select(includePersistedSources
+        ? 'google_access_token, google_refresh_token, google_token_expiry, google_calendar_sync, google_tasks_sync, google_selected_calendar_ids, google_selected_tasklist_ids, google_imported_source_map'
+        : 'google_access_token, google_refresh_token, google_token_expiry, google_calendar_sync, google_tasks_sync'
+      )
       .eq('user_id', session.user.id)
       .maybeSingle();
+
+    let { data, error } = await selectGoogleSettings(true);
+
+    if (error && /google_selected_|google_imported_source_map|column/i.test(error.message)) {
+      const fallback = await selectGoogleSettings(false);
+      data = fallback.data;
+      error = fallback.error;
+    }
 
     if (error) {
       console.error('Failed to load Google settings:', error);
@@ -374,6 +385,9 @@ function AppContent() {
         google_tasks_sync: false,
       })
       .eq('user_id', session.user.id);
+    setGoogleCalendars([]);
+    setGoogleTaskLists([]);
+    setGoogleImportedSourceMap({});
     setRefreshKey((k) => k + 1);
   };
 
