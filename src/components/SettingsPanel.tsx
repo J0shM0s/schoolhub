@@ -322,7 +322,7 @@ export function SettingsPanel({
                               />
                               {sourceLabel(source)}
                             </label>
-                          )))}
+                          ))}
                         </div>
                         <button
                           onClick={handleSyncCalendar}
@@ -374,7 +374,7 @@ export function SettingsPanel({
                               />
                               {sourceLabel(source)}
                             </label>
-                          )))}
+                          ))}
                         </div>
                         <button
                           onClick={handleSyncTasks}
