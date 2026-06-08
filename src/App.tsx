@@ -37,6 +37,8 @@ function AppContent() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusType, setStatusType] = useState<'success' | 'error'>('success');
   const [refreshKey, setRefreshKey] = useState(0);
   const [googleCalendars, setGoogleCalendars] = useState<GoogleSource[]>([]);
   const [googleTaskLists, setGoogleTaskLists] = useState<GoogleSource[]>([]);
@@ -79,8 +81,10 @@ function AppContent() {
   const handleToggleTask = async (id: string, completed: boolean) => {
     await updateTask(id, { completed });
     if (completed) {
+      setStatusType('success');
+      setStatusMessage(t('saved'));
       setShowSuccess(true);
-      setTimeout(() => setShowSuccess(false), 2000);
+      setTimeout(() => setShowSuccess(false), 2500);
     }
   };
 
@@ -107,8 +111,10 @@ function AppContent() {
         study_progress: 0,
       });
     }
+    setStatusType('success');
+    setStatusMessage(t('saved'));
     setShowSuccess(true);
-    setTimeout(() => setShowSuccess(false), 2000);
+    setTimeout(() => setShowSuccess(false), 2500);
   };
 
   const handleDateSelect = (date: Date) => {
@@ -158,25 +164,47 @@ function AppContent() {
       const expiresAt = typeof data.expires_at === 'number' ? data.expires_at : null;
 
       if (accessToken) {
-        await supabase
+        const { data: existingSettings } = await supabase
+          .from('user_settings')
+          .select('google_refresh_token')
+          .eq('user_id', session.user.id)
+          .maybeSingle();
+
+        const { data: savedSettings, error } = await supabase
           .from('user_settings')
           .upsert({
             user_id: session.user.id,
             google_access_token: accessToken,
-            google_refresh_token: refreshToken ?? null,
+            google_refresh_token: refreshToken ?? existingSettings?.google_refresh_token ?? null,
             google_token_expiry: expiresAt,
             google_calendar_sync: true,
             google_tasks_sync: true,
-          })
-          .eq('user_id', session.user.id);
+          }, { onConflict: 'user_id' })
+          .select('google_access_token, google_refresh_token')
+          .maybeSingle();
+
+        if (error || (!savedSettings?.google_access_token && !savedSettings?.google_refresh_token)) {
+          console.error('Failed to save Google tokens:', error);
+          setStatusType('error');
+          setStatusMessage(error?.message || 'Google konnte nicht gespeichert werden.');
+          setShowSuccess(true);
+          setTimeout(() => setShowSuccess(false), 5000);
+          return;
+        }
+
+        setGoogleCalendars([]);
+        setGoogleTaskLists([]);
         setRefreshKey((k) => k + 1);
+        setStatusType('success');
+        setStatusMessage(t('saved'));
         setShowSuccess(true);
+        setTimeout(() => setShowSuccess(false), 2500);
       }
     };
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [session?.user?.id]);
+  }, [session?.user?.id, t]);
 
   const loadGoogleSettings = useCallback(async () => {
     if (!session?.user?.id) {
@@ -338,8 +366,13 @@ function AppContent() {
     if (tasksToInsert.length > 0 || examsToInsert.length > 0) {
       await refresh();
     }
-    if (showSaved) setShowSuccess(true);
-  }, [exams, loadGoogleSettings, refresh, session?.user?.id, tasks, updateGoogleTokens]);
+    if (showSaved) {
+      setStatusType('success');
+      setStatusMessage(t('saved'));
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 2500);
+    }
+  }, [exams, loadGoogleSettings, refresh, session?.user?.id, t, tasks, updateGoogleTokens]);
 
   const handleRefreshGoogleSources = useCallback(async () => {
     await importGoogleData(false);
@@ -459,7 +492,10 @@ function AppContent() {
         .eq('user_id', session.user.id);
       setRefreshKey((k) => k + 1);
     }
+    setStatusType('success');
+    setStatusMessage(t('saved'));
     setShowSuccess(true);
+    setTimeout(() => setShowSuccess(false), 2500);
   };
 
   const handleSyncTasks = async () => {
@@ -505,7 +541,10 @@ function AppContent() {
         .eq('user_id', session.user.id);
       setRefreshKey((k) => k + 1);
     }
+    setStatusType('success');
+    setStatusMessage(t('saved'));
     setShowSuccess(true);
+    setTimeout(() => setShowSuccess(false), 2500);
   };
 
   const tabs = [
@@ -661,13 +700,19 @@ function AppContent() {
       />
 
       {showSuccess && (
-        <div className="fixed bottom-24 lg:bottom-8 left-1/2 -translate-x-1/2 bg-green-500 text-white px-6 py-3 rounded-xl shadow-lg flex items-center gap-2 animate-in fade-in slide-in-from-bottom-4 duration-300 z-50">
+        <div className={`fixed bottom-24 lg:bottom-8 left-1/2 -translate-x-1/2 text-white px-6 py-3 rounded-xl shadow-lg flex items-center gap-2 animate-in fade-in slide-in-from-bottom-4 duration-300 z-50 ${
+          statusType === 'success' ? 'bg-green-500' : 'bg-red-500'
+        }`}>
           <div className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center">
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-            </svg>
+            {statusType === 'success' ? (
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <span className="text-sm font-bold">!</span>
+            )}
           </div>
-          <span className="font-medium">{t('saved')}</span>
+          <span className="font-medium">{statusMessage || t('saved')}</span>
         </div>
       )}
     </div>
