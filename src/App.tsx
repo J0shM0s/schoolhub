@@ -85,27 +85,34 @@ function AppContent() {
     setIsModalOpen(true);
   };
 
-  const handleGoogleConnect = useCallback(() => {
+  const handleGoogleConnect = useCallback(async () => {
     const userId = session?.user?.id;
     if (!userId) return;
 
-    const width = 600;
-    const height = 700;
-    const left = window.screenX + (window.outerWidth - width) / 2;
-    const top = window.screenY + (window.outerHeight - height) / 2;
+    try {
+      const res = await fetch(`/.netlify/functions/google-auth-url?state=${encodeURIComponent(userId)}`);
+      const data = await res.json();
+      
+      const width = 600;
+      const height = 700;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
 
-    const popup = window.open(
-      `/.netlify/functions/google-auth-url?state=${encodeURIComponent(userId)}`,
-      'GoogleSignIn',
-      `width=${width},height=${height},left=${left},top=${top}`
-    );
+      const popup = window.open(
+        data.url,
+        'GoogleSignIn',
+        `width=${width},height=${height},left=${left},top=${top}`
+      );
 
-    const checkPopup = setInterval(() => {
-      if (!popup || popup.closed) {
-        clearInterval(checkPopup);
-        setRefreshKey((k) => k + 1);
-      }
-    }, 500);
+      const checkPopup = setInterval(() => {
+        if (!popup || popup.closed) {
+          clearInterval(checkPopup);
+          setRefreshKey((k) => k + 1);
+        }
+      }, 500);
+    } catch (error) {
+      console.error('Failed to get Google auth URL:', error);
+    }
   }, [session?.user?.id]);
 
   useEffect(() => {
