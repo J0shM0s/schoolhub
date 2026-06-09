@@ -158,9 +158,6 @@ export function SettingsPanel({
     </span>
   );
 
-  const selectedCalendarsCount = googleCalendars.filter((c) => c.selected).length;
-  const selectedTaskListsCount = googleTaskLists.filter((t) => t.selected).length;
-
   if (!isOpen) return null;
 
   return (
@@ -318,7 +315,6 @@ export function SettingsPanel({
                                 checked={source.selected}
                                 onChange={(event) => onGoogleSourceToggle('calendar', source.id, event.target.checked)}
                                 className="h-4 w-4 rounded border-gray-300 text-blue-600"
-                                disabled={source.selected && selectedCalendarsCount === 1}
                               />
                               {sourceLabel(source)}
                             </label>
@@ -370,7 +366,6 @@ export function SettingsPanel({
                                 checked={source.selected}
                                 onChange={(event) => onGoogleSourceToggle('taskList', source.id, event.target.checked)}
                                 className="h-4 w-4 rounded border-gray-300 text-green-600"
-                                disabled={source.selected && selectedTaskListsCount === 1}
                               />
                               {sourceLabel(source)}
                             </label>
