@@ -381,6 +381,21 @@ function AppContent() {
   const handleGoogleSourceToggle = useCallback(async (kind: 'calendar' | 'taskList', id: string, selected: boolean) => {
     if (!session?.user?.id) return;
 
+    // Prevent deselecting the last selected calendar or task list
+    if (!selected) {
+      if (kind === 'calendar') {
+        const selectedCount = googleCalendars.filter((s) => s.selected).length;
+        if (selectedCount <= 1 && googleCalendars.some((s) => s.id === id && s.selected)) {
+          return; // Keep at least 1 calendar selected
+        }
+      } else {
+        const selectedCount = googleTaskLists.filter((s) => s.selected).length;
+        if (selectedCount <= 1 && googleTaskLists.some((s) => s.id === id && s.selected)) {
+          return; // Keep at least 1 task list selected
+        }
+      }
+    }
+
     if (kind === 'calendar') {
       const next = googleCalendars.map((source) => source.id === id ? { ...source, selected } : source);
       setGoogleCalendars(next);

@@ -111,12 +111,12 @@
   outline-offset: 2px;
 }
 
-/* Smooth checkbox animation */
+
 input[type="checkbox"] {
   transition: all 0.15s ease-in-out;
 }
 
-/* Date input styling */
+
 input[type="date"]::-webkit-calendar-picker-indicator {
   cursor: pointer;
   opacity: 0.6;
