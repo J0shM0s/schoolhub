@@ -378,45 +378,34 @@ function AppContent() {
     await importGoogleData(false);
   }, [importGoogleData]);
 
-  const handleGoogleSourceToggle = useCallback(async (kind: 'calendar' | 'taskList', id: string, selected: boolean) => {
+  const handleGoogleSourceToggle = useCallback((kind: 'calendar' | 'taskList', id: string, selected: boolean) => {
+    // Only update local state, don't save to DB yet
+    if (kind === 'calendar') {
+      setGoogleCalendars((prev) =>
+        prev.map((source) => (source.id === id ? { ...source, selected } : source))
+      );
+    } else {
+      setGoogleTaskLists((prev) =>
+        prev.map((source) => (source.id === id ? { ...source, selected } : source))
+      );
+    }
+  }, []);
+
+  const handleSaveGoogleSources = useCallback(async () => {
     if (!session?.user?.id) return;
 
-    // Prevent deselecting the last selected calendar or task list
-    if (!selected) {
-      if (kind === 'calendar') {
-        const selectedCount = googleCalendars.filter((s) => s.selected).length;
-        if (selectedCount <= 1 && googleCalendars.some((s) => s.id === id && s.selected)) {
-          return; // Keep at least 1 calendar selected
-        }
-      } else {
-        const selectedCount = googleTaskLists.filter((s) => s.selected).length;
-        if (selectedCount <= 1 && googleTaskLists.some((s) => s.id === id && s.selected)) {
-          return; // Keep at least 1 task list selected
-        }
-      }
-    }
+    const calendarIds = googleCalendars.filter((s) => s.selected).map((s) => s.id);
+    const taskListIds = googleTaskLists.filter((s) => s.selected).map((s) => s.id);
 
-    if (kind === 'calendar') {
-      const next = googleCalendars.map((source) => source.id === id ? { ...source, selected } : source);
-      setGoogleCalendars(next);
-      await supabase
-        .from('user_settings')
-        .upsert({
-          user_id: session.user.id,
-          google_selected_calendar_ids: next.filter((source) => source.selected).map((source) => source.id),
-        })
-        .eq('user_id', session.user.id);
-    } else {
-      const next = googleTaskLists.map((source) => source.id === id ? { ...source, selected } : source);
-      setGoogleTaskLists(next);
-      await supabase
-        .from('user_settings')
-        .upsert({
-          user_id: session.user.id,
-          google_selected_tasklist_ids: next.filter((source) => source.selected).map((source) => source.id),
-        })
-        .eq('user_id', session.user.id);
-    }
+    await supabase
+      .from('user_settings')
+      .upsert({
+        user_id: session.user.id,
+        google_selected_calendar_ids: calendarIds,
+        google_selected_tasklist_ids: taskListIds,
+      })
+      .eq('user_id', session.user.id);
+
     await importGoogleData(true);
   }, [googleCalendars, googleTaskLists, importGoogleData, session?.user?.id]);
 
@@ -696,7 +685,11 @@ function AppContent() {
       <SettingsPanel
         key={refreshKey}
         isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        onClose={async () => {
+          // Auto-save Google sources when closing the settings panel
+          await handleSaveGoogleSources();
+          setIsSettingsOpen(false);
+        }}
         onLogout={async () => {
           await signOut();
           setIsSettingsOpen(false);
@@ -708,6 +701,7 @@ function AppContent() {
         onImportGoogleData={() => importGoogleData(true)}
         onRefreshGoogleSources={handleRefreshGoogleSources}
         onGoogleSourceToggle={handleGoogleSourceToggle}
+        onSaveGoogleSources={handleSaveGoogleSources}
         googleCalendars={googleCalendars}
         googleTaskLists={googleTaskLists}
         userEmail={session?.user?.email || ''}

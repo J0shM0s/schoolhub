@@ -24,6 +24,7 @@ interface SettingsPanelProps {
   onImportGoogleData: () => void;
   onRefreshGoogleSources: () => void;
   onGoogleSourceToggle: (kind: 'calendar' | 'taskList', id: string, selected: boolean) => void;
+  onSaveGoogleSources: () => Promise<void>;
   googleCalendars: GoogleSource[];
   googleTaskLists: GoogleSource[];
   userEmail: string;
@@ -41,6 +42,7 @@ export function SettingsPanel({
   onImportGoogleData,
   onRefreshGoogleSources,
   onGoogleSourceToggle,
+  onSaveGoogleSources,
   googleCalendars,
   googleTaskLists,
   userEmail,
@@ -49,7 +51,7 @@ export function SettingsPanel({
   const { t, language, setLanguage } = useLanguage();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState<'calendar' | 'tasks' | 'import' | 'sources' | null>(null);
+  const [syncing, setSyncing] = useState<'calendar' | 'tasks' | 'import' | 'sources' | 'save' | null>(null);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -148,6 +150,12 @@ export function SettingsPanel({
   const handleRefreshGoogleSources = async () => {
     setSyncing('sources');
     await onRefreshGoogleSources();
+    setSyncing(null);
+  };
+
+  const handleSave = async () => {
+    setSyncing('save');
+    await onSaveGoogleSources();
     setSyncing(null);
   };
 
@@ -381,6 +389,15 @@ export function SettingsPanel({
                       </div>
                     )}
                   </div>
+
+                  <button
+                    onClick={handleSave}
+                    disabled={syncing === 'save'}
+                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${syncing === 'save' ? 'animate-spin' : ''}`} />
+                    {syncing === 'save' ? t('loading') : t('save')}
+                  </button>
 
                   <button
                     onClick={onGoogleDisconnect}
